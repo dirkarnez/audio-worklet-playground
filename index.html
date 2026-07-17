@@ -1,0 +1,179 @@
+<script>
+  // input: file / stream
+  // output: live playback / file
+
+  // distortion-processor.js
+class DistortionProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [{
+      name: 'gain',
+      defaultValue: 10,
+      minValue: 1,
+      maxValue: 100
+    }];
+  }
+
+  process(inputs, outputs, parameters) {
+    const input = inputs[0];
+    const output = outputs[0];
+    const gain = parameters.gain;
+
+    // Loop through all audio channels (e.g., Left and Right)
+    for (let channel = 0; channel < input.length; ++channel) {
+      const inputChannel = input[channel];
+      const outputChannel = output[channel];
+
+      // Process each individual audio sample
+      for (let i = 0; i < inputChannel.length; ++i) {
+        // 1. Amplify the input signal
+        let signal = inputChannel[i] * gain[i]; 
+        
+        // 2. Hard clip the signal between -1.0 and 1.0
+        outputChannel[i] = Math.max(-1.0, Math.min(1.0, signal));
+      }
+    }
+    return true;
+  }
+}
+
+registerProcessor('distortion-processor', DistortionProcessor);
+  async function playDistortedFile(audioFileUrl) {
+    // 1. Initialize Audio Context
+    const audioContext = new AudioContext();
+  
+    // 2. Load and decode the audio file
+    const response = await fetch(audioFileUrl);
+    const arrayBuffer = await response.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+  
+    // 3. Load the AudioWorklet processor file
+    await audioContext.audioWorklet.addModule('distortion-processor.js');
+  
+    // 4. Create the audio nodes
+    const sourceNode = audioContext.createBufferSource();
+    const distortionNode = new AudioWorkletNode(audioContext, 'distortion-processor');
+  
+    sourceNode.buffer = audioBuffer;
+  
+    // 5. Connect the audio graph: Source -> Distortion -> Speakers
+    sourceNode.connect(distortionNode);
+    distortionNode.connect(audioContext.destination);
+  
+    // 6. Adjust distortion amount dynamically (Optional)
+    const gainParam = distortionNode.parameters.get('gain');
+    gainParam.setValueAtTime(25, audioContext.currentTime); // Increase for more crunch
+  
+    // 7. Start playback
+    sourceNode.start();
+  }
+  
+  async function recordDistortedFile(audioFileUrl) {
+    // 1. Initialize Audio Context
+    const audioContext = new AudioContext();
+  
+    // 2. Load and decode your audio file
+    const response = await fetch(audioFileUrl);
+    const arrayBuffer = await response.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+  
+    // 3. Load the AudioWorklet processor file
+    await audioContext.audioWorklet.addModule('distortion-processor.js');
+  
+    // 4. Create the nodes
+    const sourceNode = audioContext.createBufferSource();
+    const distortionNode = new AudioWorkletNode(audioContext, 'distortion-processor');
+    
+    // Create a destination node for recording
+    const recordDestination = audioContext.createMediaStreamDestination();
+  
+    sourceNode.buffer = audioBuffer;
+  
+    // 5. Connect the audio graph
+    sourceNode.connect(distortionNode);
+    
+    // Route distortion output to BOTH the speakers and the recorder
+    distortionNode.connect(audioContext.destination);
+    distortionNode.connect(recordDestination);
+  
+    // 6. Set up the MediaRecorder to capture the stream
+    const mediaRecorder = new MediaRecorder(recordDestination.stream);
+    const audioChunks = [];
+  
+    // Collect audio data packets as they are processed
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunks.push(event.data);
+      }
+    };
+  
+    // Convert all collected packets into a single Blob when done
+    mediaRecorder.onstop = () => {
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      
+      // Create a temporary link to download the file
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const link = document.createElement('a');
+      link.href = audioUrl;
+      link.download = 'distorted-guitar.webm';
+      link.click();
+    };
+  
+    // 7. Start recording and playback simultaneously
+    mediaRecorder.start();
+    sourceNode.start();
+  
+    // Automatically stop recording when the file finishes playing
+    sourceNode.onended = () => {
+      mediaRecorder.stop();
+      audioContext.close();
+    };
+  }
+  
+  async function processOfflineDistortion(audioFileUrl) {
+    // 1. Fetch and decode the audio file first to get its dimensions
+    const response = await fetch(audioFileUrl);
+    const arrayBuffer = await response.arrayBuffer();
+    
+    // Temporary context just to decode the metadata
+    const tempContext = new AudioContext();
+    const audioBuffer = await tempContext.decodeAudioData(arrayBuffer);
+    tempContext.close();
+  
+    // 2. Initialize OfflineAudioContext using the exact file specs
+    const offlineContext = new OfflineAudioContext(
+      audioBuffer.numberOfChannels,
+      audioBuffer.length,
+      audioBuffer.sampleRate
+    );
+  
+    // 3. Load the AudioWorklet into the offline context
+    await offlineContext.audioWorklet.addModule('distortion-processor.js');
+  
+    // 4. Create and connect nodes inside the offline graph
+    const sourceNode = offlineContext.createBufferSource();
+    const distortionNode = new AudioWorkletNode(offlineContext, 'distortion-processor');
+  
+    sourceNode.buffer = audioBuffer;
+  
+    // Connect source -> distortion -> offline destination
+    sourceNode.connect(distortionNode);
+    distortionNode.connect(offlineContext.destination);
+  
+    // Start the source immediately at time 0
+    sourceNode.start(0);
+  
+    // 5. Render the audio at maximum CPU speed
+    console.time('Offline Render Time');
+    const renderedBuffer = await offlineContext.startRendering();
+    console.timeEnd('Offline Render Time');
+  
+    // 6. Convert the rendered AudioBuffer to a WAV Blob and download
+    const wavBlob = audioBufferToWav(renderedBuffer);
+    const downloadUrl = URL.createObjectURL(wavBlob);
+    
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = 'distorted-fast.wav';
+    link.click();
+  }
+</script>

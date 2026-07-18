@@ -1,3 +1,8 @@
+audio-worklet-playground
+========================
+<kbd>[**vscode-web-action**](https://github.com/dirkarnez/vscode-web-action/actions/workflows/vscode-web.yml)</kbd><br>
+
+
 MessagePort
 https://github.com/GoogleChromeLabs/web-audio-samples/blob/main/src/audio-worklet/basic/one-pole-filter/main.js
 https://github.com/GoogleChromeLabs/web-audio-samples/blob/main/src/audio-worklet/basic/message-port/main.js

@@ -1,49 +1,49 @@
-<script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+  content="user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1, width=device-width, height=device-height">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <title>audio-worklet-playground</title>
+  <script src="https://cdn.jsdelivr.net/npm/audiobuffer-to-wav@1.0.0/index.min.js"></script>
+</head>
+<body>
+  <a href="https://github.com/dirkarnez/audio-worklet-playground" target="_blank">dirkarnez/audio-worklet-playground</a><br>
+  <input type="file" id="file-input">
+  <script>
+    const fileInputElement = document.getElementById("file-input");
+    fileInputElement.addEventListener("change", async function () {
+      const fileList = Array
+      .from(this.files);
+
+      if (fileList.length > 1) {
+        throw "Only 1 file"
+      }
+      
+      const arrayBufferList = await Promise.all(fileList.map(file => {
+        return new Promise((res) => {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            res(event.target.result);
+          }
+          reader.readAsArrayBuffer(file);
+        });
+      }));
+
+      // await playDistortedFile(arrayBufferList[0]);
+      await processOfflineDistortion(arrayBufferList[0]);
+    }, false);
+  </script>
+  <script>
   // input: file / stream
   // output: live playback / file
 
-  // distortion-processor.js
-class DistortionProcessor extends AudioWorkletProcessor {
-  static get parameterDescriptors() {
-    return [{
-      name: 'gain',
-      defaultValue: 10,
-      minValue: 1,
-      maxValue: 100
-    }];
-  }
 
-  process(inputs, outputs, parameters) {
-    const input = inputs[0];
-    const output = outputs[0];
-    const gain = parameters.gain;
-
-    // Loop through all audio channels (e.g., Left and Right)
-    for (let channel = 0; channel < input.length; ++channel) {
-      const inputChannel = input[channel];
-      const outputChannel = output[channel];
-
-      // Process each individual audio sample
-      for (let i = 0; i < inputChannel.length; ++i) {
-        // 1. Amplify the input signal
-        let signal = inputChannel[i] * gain[i]; 
-        
-        // 2. Hard clip the signal between -1.0 and 1.0
-        outputChannel[i] = Math.max(-1.0, Math.min(1.0, signal));
-      }
-    }
-    return true;
-  }
-}
-
-registerProcessor('distortion-processor', DistortionProcessor);
-  async function playDistortedFile(audioFileUrl) {
+  async function playDistortedFile(arrayBuffer) {
     // 1. Initialize Audio Context
     const audioContext = new AudioContext();
-  
-    // 2. Load and decode the audio file
-    const response = await fetch(audioFileUrl);
-    const arrayBuffer = await response.arrayBuffer();
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
   
     // 3. Load the AudioWorklet processor file
@@ -60,11 +60,11 @@ registerProcessor('distortion-processor', DistortionProcessor);
     distortionNode.connect(audioContext.destination);
   
     // 6. Adjust distortion amount dynamically (Optional)
-    const gainParam = distortionNode.parameters.get('gain');
-    gainParam.setValueAtTime(25, audioContext.currentTime); // Increase for more crunch
+    // const gainParam = distortionNode.parameters.get('gain');
+    // gainParam.setValueAtTime(25, audioContext.currentTime); // Increase for more crunch
   
     // 7. Start playback
-    sourceNode.start();
+    sourceNode.start(0, 18);
   }
   
   async function recordDistortedFile(audioFileUrl) {
@@ -129,11 +129,7 @@ registerProcessor('distortion-processor', DistortionProcessor);
     };
   }
   
-  async function processOfflineDistortion(audioFileUrl) {
-    // 1. Fetch and decode the audio file first to get its dimensions
-    const response = await fetch(audioFileUrl);
-    const arrayBuffer = await response.arrayBuffer();
-    
+  async function processOfflineDistortion(arrayBuffer) {
     // Temporary context just to decode the metadata
     const tempContext = new AudioContext();
     const audioBuffer = await tempContext.decodeAudioData(arrayBuffer);
@@ -166,9 +162,14 @@ registerProcessor('distortion-processor', DistortionProcessor);
     console.time('Offline Render Time');
     const renderedBuffer = await offlineContext.startRendering();
     console.timeEnd('Offline Render Time');
-  
+    
     // 6. Convert the rendered AudioBuffer to a WAV Blob and download
-    const wavBlob = audioBufferToWav(renderedBuffer);
+    const wav = audioBufferToWav(renderedBuffer, { float32: true });
+
+    var wavBlob = new window.Blob([ new DataView(wav) ], {
+      type: 'audio/wav'
+    });
+
     const downloadUrl = URL.createObjectURL(wavBlob);
     
     const link = document.createElement('a');
@@ -177,3 +178,6 @@ registerProcessor('distortion-processor', DistortionProcessor);
     link.click();
   }
 </script>
+
+</body>
+</html>

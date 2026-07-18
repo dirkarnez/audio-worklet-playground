@@ -2,8 +2,155 @@
 ================================================================================
 <kbd>[**vscode-web-action**](https://github.com/dirkarnez/vscode-web-action/actions/workflows/vscode-web.yml)</kbd><br>
 
+### TODOs
+- MessagePort
+- emscripten
+  - `emcc dsp.c -o dsp-worklet.js -sENVIRONMENT=worker -sSINGLE_FILE=1 -sEXPORT_ES6=1`, or
+  - side module
+    - `emcc dsp.c -o dsp.wasm -sSIDE_MODULE=1 -O3 -sEXPORTED_FUNCTIONS="['_process_audio', '_init_dsp']"`
+    - ```js
+      class EmscriptenAudioProcessor extends AudioWorkletProcessor {
+        constructor() {
+          super();
+          this.port.onmessage = (e) => {
+            if (e.data.type === 'MODULE') {
+              this.initWasm(e.data.wasmBytes);
+            }
+          };
+        }
 
-MessagePort
+        async initWasm(wasmBytes) {
+          // Compile and instantiate the standalone Wasm module
+          const { instance } = await WebAssembly.instantiate(wasmBytes, {
+            env: {
+              memory: new WebAssembly.Memory({ initial: 256, maximum: 256 }),
+              abort: () => console.log("Abort called")
+            }
+          });
+          
+          this.wasm = instance.exports;
+          this.wasm._init_dsp();
+          
+          // Create Float32 views into Wasm memory for audio buffers if needed
+          this.wasmMemory = instance.exports.memory;
+        }
+
+        process(inputs, outputs, parameters) {
+          if (!this.wasm) return true; // Wait until Wasm is loaded
+
+          const input = inputs[0];
+          const output = outputs[0];
+
+          // Example: Pass channel data pointers to your Wasm dsp function
+          // You would copy input data to Wasm memory, call _process_audio, and copy back to output
+          
+          return true;
+        }
+      }
+
+      registerProcessor('emscripten-audio-processor', EmscriptenAudioProcessor);
+      ```
+    - `emcc dsp.cpp -o dsp.wasm -sSIDE_MODULE=1 -O3`
+      - ```js
+        class ZeroCopyProcessor extends AudioWorkletProcessor {
+          constructor() {
+            super();
+            this.wasmLoaded = false;
+            this.port.onmessage = async (e) => {
+              if (e.data.type === 'INIT') await this.initWasm(e.data.wasmBytes);
+            };
+          }
+
+          async initWasm(wasmBytes) {
+            this.memory = new WebAssembly.Memory({ initial: 256, maximum: 256 });
+            const { instance } = await WebAssembly.instantiate(wasmBytes, {
+              env: { memory: this.memory, abort: () => {} }
+            });
+
+            const exports = instance.exports;
+
+            // Get the raw byte offsets from C++
+            const inputOffset = exports.get_input_ptr();
+            const outputOffset = exports.get_output_ptr();
+
+            // Create views targeting the EXACT memory addresses inside the Wasm Heap
+            // No data is copied here; these are just structural lenses pointing at C++ memory
+            this.wasmInput = new Float32Array(this.memory.buffer, inputOffset, 128);
+            this.wasmOutput = new Float32Array(this.memory.buffer, outputOffset, 128);
+
+            this.executeDsp = exports.process_audio;
+            this.wasmLoaded = true;
+          }
+
+          process(inputs, outputs) {
+            if (!this.wasmLoaded) return true;
+
+            const webAudioInput = inputs[0]?.[0];
+            const webAudioOutput = outputs[0]?.[0];
+
+            if (!webAudioInput || !webAudioOutput) return true;
+
+            // --- ZERO COPY BRIDGE ---
+            // Instead of copying arrays, read/write directly across the memory boundary
+            for (let i = 0; i < 128; ++i) {
+              this.wasmInput[i] = webAudioInput[i]; // Write straight into C++ memory
+            }
+
+            // Execute the C++ DSP math over its own memory space
+            this.executeDsp();
+
+            for (let i = 0; i < 128; ++i) {
+              webAudioOutput[i] = this.wasmOutput[i]; // Read straight out of C++ memory
+            }
+
+            return true;
+          }
+        }
+
+        registerProcessor('zero-copy-processor', ZeroCopyProcessor);
+
+        ```
+      - ```c
+        #include <emscripten.h>
+
+        #define BUFFER_SIZE 128
+
+        // Pre-allocate the input and output blocks inside the Wasm Linear Heap
+        float input_buffer[BUFFER_SIZE];
+        float output_buffer[BUFFER_SIZE];
+
+        // Internal DSP State
+        float filter_state = 0.0f;
+        float cutoff = 0.3f;
+
+        extern "C" {
+
+            // JavaScript will call this to find WHERE the input buffer lives in Wasm memory
+            EMSCRIPTEN_KEEPALIVE
+            float* get_input_ptr() {
+                return input_buffer;
+            }
+
+            // JavaScript will call this to find WHERE the output buffer lives in Wasm memory
+            EMSCRIPTEN_KEEPALIVE
+            float* get_output_ptr() {
+                return output_buffer;
+            }
+
+            // This loop runs with ZERO memory copying
+            EMSCRIPTEN_KEEPALIVE
+            void process_audio() {
+                for (int i = 0; i < BUFFER_SIZE; ++i) {
+                    // Read directly from the heap memory location that JS wrote to
+                    filter_state += cutoff * (input_buffer[i] - filter_state);
+                    
+                    // Write directly to the heap memory location that JS will read from
+                    output_buffer[i] = filter_state;
+                }
+            }
+        }
+        ```
+
 https://github.com/GoogleChromeLabs/web-audio-samples/blob/main/src/audio-worklet/basic/one-pole-filter/main.js
 https://github.com/GoogleChromeLabs/web-audio-samples/blob/main/src/audio-worklet/basic/message-port/main.js
 ```

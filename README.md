@@ -1,5 +1,5 @@
-audio-worklet-playground
-========================
+[audio-worklet-playground](https://dirkarnez.github.io/audio-worklet-playground)
+================================================================================
 <kbd>[**vscode-web-action**](https://github.com/dirkarnez/vscode-web-action/actions/workflows/vscode-web.yml)</kbd><br>
 
 

@@ -4,6 +4,150 @@
 
 ### TODOs
 - MessagePort
+- Mic
+  - ```html
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width,initial-scale=1" />
+      <title>Distortion — Gain Knob</title>
+      <style>
+        body { font-family: system-ui, sans-serif; padding: 20px; max-width: 640px; margin: auto; }
+        .controls { display:flex; gap:16px; align-items:center; margin-top:18px; }
+        .knob { display:flex; flex-direction:column; align-items:center; }
+        input[type="range"] { width:220px; }
+        button { padding:8px 12px; }
+        .status { margin-top:12px; color:#555; }
+      </style>
+    </head>
+    <body>
+      <h1>Distortion + Gain knob</h1>
+    
+      <p>Click "Start audio" to load the worklet and start a test tone. Toggle to use your microphone instead of the oscillator.</p>
+    
+      <div class="controls">
+        <div>
+          <button id="startBtn">Start audio</button>
+          <label style="margin-left:8px;">
+            <input type="checkbox" id="useMic"> Use microphone
+          </label>
+        </div>
+    
+        <div class="knob">
+          <label for="gainRange">Gain: <span id="gainValue">1</span></label>
+          <input id="gainRange" type="range" min="1" max="100" step="1" value="1">
+        </div>
+      </div>
+    
+      <div class="status" id="status">idle</div>
+    
+      <script>
+        let audioCtx = null;
+        let workletNode = null;
+        let source = null;
+        let micStream = null;
+    
+        const startBtn = document.getElementById('startBtn');
+        const useMic = document.getElementById('useMic');
+        const gainRange = document.getElementById('gainRange');
+        const gainValue = document.getElementById('gainValue');
+        const status = document.getElementById('status');
+    
+        gainValue.textContent = gainRange.value;
+    
+        async function startAudio() {
+          if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          }
+    
+          // Ensure user gesture resumed context
+          if (audioCtx.state === 'suspended') await audioCtx.resume();
+    
+          status.textContent = 'loading worklet...';
+    
+          try {
+            // Load the worklet module — adjust path if your processor is elsewhere
+            await audioCtx.audioWorklet.addModule('distortion-processor.js');
+          } catch (err) {
+            status.textContent = 'Error loading worklet: ' + err;
+            console.error(err);
+            return;
+          }
+    
+          // Create AudioWorkletNode with default parameter value
+          workletNode = new AudioWorkletNode(audioCtx, 'distortion-processor', {
+            parameterData: { gain: Number(gainRange.value) }
+          });
+    
+          // Create source: microphone or oscillator
+          if (useMic.checked) {
+            status.textContent = 'requesting microphone...';
+            try {
+              micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+              source = audioCtx.createMediaStreamSource(micStream);
+            } catch (err) {
+              status.textContent = 'Microphone access denied or error: ' + err;
+              console.error(err);
+              return;
+            }
+          } else {
+            // Test tone
+            const osc = audioCtx.createOscillator();
+            osc.type = 'sawtooth';
+            osc.frequency.value = 220;
+            osc.start();
+            source = osc;
+          }
+    
+          // Connect: source -> worklet -> destination
+          source.connect(workletNode);
+          workletNode.connect(audioCtx.destination);
+    
+          // Hook up gain control to the audioParam
+          const gainParam = workletNode.parameters.get('gain');
+          gainParam.setValueAtTime(Number(gainRange.value), audioCtx.currentTime);
+    
+          // Update knob events
+          gainRange.oninput = () => {
+            const v = Number(gainRange.value);
+            gainValue.textContent = v;
+            // Smoothly ramp to new value
+            gainParam.cancelScheduledValues(audioCtx.currentTime);
+            gainParam.linearRampToValueAtTime(v, audioCtx.currentTime + 0.02);
+          };
+    
+          startBtn.textContent = 'Stop audio';
+          status.textContent = 'running';
+          startBtn.onclick = stopAudio;
+        }
+    
+        function stopAudio() {
+          if (source) {
+            try {
+              source.disconnect();
+            } catch (e) {}
+            if (source.stop) source.stop();
+            source = null;
+          }
+          if (workletNode) {
+            try { workletNode.disconnect(); } catch(e){}
+            workletNode = null;
+          }
+          if (micStream) {
+            for (const t of micStream.getTracks()) t.stop();
+            micStream = null;
+          }
+          status.textContent = 'stopped';
+          startBtn.textContent = 'Start audio';
+          startBtn.onclick = startAudio;
+        }
+    
+        startBtn.onclick = startAudio;
+      </script>
+    </body>
+    </html>
+    ```
 - emscripten
   - `emcc dsp.c -o dsp-worklet.js -sENVIRONMENT=worker -sSINGLE_FILE=1 -sEXPORT_ES6=1`, or
   - side module

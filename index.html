@@ -11,8 +11,15 @@
 </head>
 <body>
   <a href="https://github.com/dirkarnez/audio-worklet-playground" target="_blank">dirkarnez/audio-worklet-playground</a><br>
-  <input type="file" id="file-input">
+  <input type="file" id="file-input"><br>
+  <div class="knob">
+    <label for="gainRange">Gain: <span id="gainValue">1</span></label>
+    <input id="gainRange" type="range" min="0" max="100" step="1" value="1">
+  </div>
   <script>
+    const gainRange = document.getElementById('gainRange');
+    const gainValue = document.getElementById('gainValue');
+
     const fileInputElement = document.getElementById("file-input");
     fileInputElement.addEventListener("change", async function () {
       const fileList = Array
@@ -32,8 +39,8 @@
         });
       }));
 
-      // await playDistortedFile(arrayBufferList[0]);
-      await processOfflineDistortion(arrayBufferList[0]);
+      await playDistortedFile(arrayBufferList[0]);
+      // await processOfflineDistortion(arrayBufferList[0]);
     }, false);
   </script>
   <script>
@@ -58,6 +65,18 @@
     // 5. Connect the audio graph: Source -> Distortion -> Speakers
     sourceNode.connect(distortionNode);
     distortionNode.connect(audioContext.destination);
+
+    const gainParam = distortionNode.parameters.get('gain');
+    gainParam.setValueAtTime(Number(gainRange.value), audioContext.currentTime);
+
+    // Update knob events
+    gainRange.oninput = () => {
+      const v = Number(gainRange.value);
+      gainValue.textContent = v;
+      // Smoothly ramp to new value
+      gainParam.cancelScheduledValues(audioContext.currentTime);
+      gainParam.linearRampToValueAtTime(v, audioContext.currentTime + 0.02);
+    };
   
     // 6. Adjust distortion amount dynamically (Optional)
     // const gainParam = distortionNode.parameters.get('gain');
@@ -162,7 +181,7 @@
     console.time('Offline Render Time');
     const renderedBuffer = await offlineContext.startRendering();
     console.timeEnd('Offline Render Time');
-    
+
     // 6. Convert the rendered AudioBuffer to a WAV Blob and download
     const wav = audioBufferToWav(renderedBuffer, { float32: true });
 

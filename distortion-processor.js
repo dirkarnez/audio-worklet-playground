@@ -3,7 +3,7 @@ class DistortionProcessor extends AudioWorkletProcessor {
     return [{
       name: 'gain',
       defaultValue: 1,
-      minValue: 1,
+      minValue: 0,
       maxValue: 100
     }];
   }
@@ -13,6 +13,8 @@ class DistortionProcessor extends AudioWorkletProcessor {
     const output = outputs[0];
     const gain = parameters.gain;
 
+    debugger;
+
     // Loop through all audio channels (e.g., Left and Right)
     for (let channel = 0; channel < input.length; ++channel) {
       const inputChannel = input[channel];
@@ -21,10 +23,10 @@ class DistortionProcessor extends AudioWorkletProcessor {
       // Process each individual audio sample
       for (let i = 0; i < inputChannel.length; ++i) {
         // 1. Amplify the input signal
-        let signal = inputChannel[i]//  * gain[i]; 
+        let signal = inputChannel[i] * gain; 
         
         // 2. Hard clip the signal between -1.0 and 1.0
-        outputChannel[i] = signal // Math.max(-1.0, Math.min(1.0, signal));
+        outputChannel[i] = Math.max(-1.0, Math.min(1.0, signal));
       }
     }
     return true;

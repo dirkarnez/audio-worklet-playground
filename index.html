@@ -78,10 +78,191 @@
       await playDistortedFile(audioFileArrayBuffer, irFilesArrayBufferList);
         // await processOfflineDistortion(audioFileArrayBuffer, irFilesArrayBufferList);
     }, false);
-    
+
     // input: file / stream
     // output: live playback / file
 
+    function generateDistortionCurve(amount = 20, samples = 4096) {
+      const k = typeof amount === 'number' ? amount : 20;
+      const curve = new Float32Array(samples);
+      const deg = Math.PI / 180;
+      for (let i = 0; i < samples; ++i) {
+          const x = (i * 2) / samples - 1;
+          // soft clipping curve (tanh-like) blended with atan for variety
+          curve[i] = (Math.atan(k * x) + Math.tanh(k * x)) * 0.5;
+        }
+        return curve;
+      }
+
+      function scaleAudioBuffer(audioContext, buffer, scale) {
+        const newBuf = audioContext.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
+        for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+          const src = buffer.getChannelData(ch);
+          const dst = newBuf.getChannelData(ch);
+          for (let i = 0; i < src.length; i++) dst[i] = src[i] * scale;
+        }
+        return newBuf;
+      }
+
+    /*
+      // --- Modified playDistortedFile with amp head + wet/dry + IR gain ---
+      async function playDistortedFile(audioFileArrayBuffer, irFilesArrayBufferList) {
+        if (!audioFileArrayBuffer) return alert('Choose an input audio file first');
+        const audioContext = new AudioContext();
+
+        // load worklet (your distortion processor)
+        await audioContext.audioWorklet.addModule('distortion-processor.js');
+        const distortionNode = new AudioWorkletNode(audioContext, 'distortion-processor');
+
+        // decode main audio
+        const audioBuffer = await audioContext.decodeAudioData(audioFileArrayBuffer.slice(0));
+        const sourceNode = audioContext.createBufferSource();
+        sourceNode.buffer = audioBuffer;
+
+        // decode IR(s)
+        const irAudioBufferList = await Promise.all(irFilesArrayBufferList.map(b => audioContext.decodeAudioData(b.slice(0))));
+        const cabIR = irAudioBufferList[0]; // pick first IR (tweak as desired)
+
+        // CAB/CONVOLVER
+        const convolver = audioContext.createConvolver();
+        convolver.normalize = false; // we control IR gain ourselves
+        // scale IR if it's too quiet (tweak factor)
+        convolver.buffer = scaleAudioBuffer(audioContext, cabIR, 4.0);
+
+        // WET/DRY GAINS
+        const wetGain = audioContext.createGain();
+        const dryGain = audioContext.createGain();
+        // initial mix (50/50)
+        wetGain.gain.value = 0.6;
+        dryGain.gain.value = 0.4;
+
+        // AMP HEAD (preamp + waveshaper + tone stack + presence)
+        const preGain = audioContext.createGain(); // input to amp head
+        const driveShaper = audioContext.createWaveShaper();
+        driveShaper.curve = generateDistortionCurve(25); // default drive amount
+        driveShaper.oversample = '4x';
+
+        // Tone stack: bass (lowShelf), mid (peaking), treble (highShelf)
+        const bassFilter = audioContext.createBiquadFilter();
+        bassFilter.type = 'lowshelf';
+        bassFilter.frequency.value = 120;
+        bassFilter.gain.value = 0;
+
+        const midFilter = audioContext.createBiquadFilter();
+        midFilter.type = 'peaking';
+        midFilter.frequency.value = 800;
+        midFilter.Q.value = 1.0;
+        midFilter.gain.value = 0;
+
+        const trebleFilter = audioContext.createBiquadFilter();
+        trebleFilter.type = 'highshelf';
+        trebleFilter.frequency.value = 3000;
+        trebleFilter.gain.value = 0;
+
+        // Presence / power amp shaping (subtle high-shelf after tone stack)
+        const presenceFilter = audioContext.createBiquadFilter();
+        presenceFilter.type = 'highshelf';
+        presenceFilter.frequency.value = 4000;
+        presenceFilter.gain.value = 0;
+
+        // Optional post-amp small compressor for glue (uncomment to use)
+        // const compressor = audioContext.createDynamicsCompressor();
+        // compressor.threshold.value = -12;
+        // compressor.ratio.value = 3;
+
+        // ROUTING:
+        // source -> distortionNode (worklet) -> preGain -> driveShaper -> tone stack -> (split) -> convolver(wet)->wetGain->destination
+        //                                                                                       -> dryGain->destination
+        sourceNode.connect(distortionNode);
+
+        // dry path: distortionNode -> dryGain -> destination
+        distortionNode.connect(dryGain);
+        dryGain.connect(audioContext.destination);
+
+        // wet path: distortionNode -> preGain -> waveshaper -> tone filters -> convolver -> wetGain -> destination
+        distortionNode.connect(preGain);
+        preGain.connect(driveShaper);
+        driveShaper.connect(bassFilter);
+        bassFilter.connect(midFilter);
+        midFilter.connect(trebleFilter);
+        trebleFilter.connect(presenceFilter);
+        presenceFilter.connect(convolver);
+        convolver.connect(wetGain);
+        wetGain.connect(audioContext.destination);
+
+        // UI hookups (if you added the controls in HTML with these IDs)
+        // Use AudioParams or simple .value updates for gains/filters
+        const driveRange = document.getElementById('driveRange');
+        const ampGainRange = document.getElementById('ampGainRange');
+        const bassRange = document.getElementById('bassRange');
+        const midRange = document.getElementById('midRange');
+        const trebleRange = document.getElementById('trebleRange');
+        const presenceRange = document.getElementById('presenceRange');
+        const irGainRange = document.getElementById('irGainRange');
+        const wetRange = document.getElementById('wetRange');
+
+        if (ampGainRange) {
+          ampGainRange.oninput = () => {
+            const v = Number(ampGainRange.value);
+            preGain.gain.setValueAtTime(v, audioContext.currentTime);
+          };
+          // set default
+          preGain.gain.value = Number(ampGainRange.value || 1.0);
+        }
+
+        if (driveRange) {
+          driveRange.oninput = () => {
+            const v = Number(driveRange.value);
+            // rebuild curve for new drive amount (cheap but fine for UI)
+            driveShaper.curve = generateDistortionCurve(v || 1);
+          };
+        }
+
+        if (bassRange) {
+          bassRange.oninput = () => bassFilter.gain.setValueAtTime(Number(bassRange.value), audioContext.currentTime);
+        }
+        if (midRange) {
+          midRange.oninput = () => midFilter.gain.setValueAtTime(Number(midRange.value), audioContext.currentTime);
+        }
+        if (trebleRange) {
+          trebleRange.oninput = () => trebleFilter.gain.setValueAtTime(Number(trebleRange.value), audioContext.currentTime);
+        }
+        if (presenceRange) {
+          presenceRange.oninput = () => presenceFilter.gain.setValueAtTime(Number(presenceRange.value), audioContext.currentTime);
+        }
+        if (irGainRange) {
+          irGainRange.oninput = () => {
+            // rescale convolver buffer dynamically: re-scale original IR buffer by value and set to convolver.buffer
+            const scale = Number(irGainRange.value) || 1;
+            convolver.buffer = scaleAudioBuffer(audioContext, cabIR, scale);
+          };
+        }
+        if (wetRange) {
+          wetRange.oninput = () => {
+            const w = Number(wetRange.value);
+            wetGain.gain.setValueAtTime(w, audioContext.currentTime);
+            dryGain.gain.setValueAtTime(1 - w, audioContext.currentTime);
+          };
+          // set initial
+          const initW = Number(wetRange.value || 0.6);
+          wetGain.gain.setValueAtTime(initW, audioContext.currentTime);
+          dryGain.gain.setValueAtTime(1 - initW, audioContext.currentTime);
+        }
+
+        // Make sure your existing distortion AudioParam (gain) is still hooked up:
+        const gainParam = distortionNode.parameters.get('gain');
+        gainParam.setValueAtTime(Number(gainRange.value || 1), audioContext.currentTime);
+        gainRange.oninput = () => {
+          const v = Number(gainRange.value);
+          gainValue.textContent = v;
+          gainParam.cancelScheduledValues(audioContext.currentTime);
+          gainParam.linearRampToValueAtTime(v, audioContext.currentTime + 0.02);
+        };
+
+        // Start
+        sourceNode.start();
+      }
+    */
     async function playDistortedFile(audioFileArrayBuffer, irFilesArrayBufferList) {
       // 1. Initialize Audio Context
       const audioContext = new AudioContext();
@@ -96,17 +277,27 @@
       const sourceNode = audioContext.createBufferSource();
       sourceNode.buffer = audioBuffer;
 
-      // 5. Connect the audio graph: Source -> Distortion -> Speakers
-      sourceNode.connect(distortionNode);
-
       const irAudioBufferList = await Promise.all(irFilesArrayBufferList.map(irFilesArrayBuffer => {
         return audioContext.decodeAudioData(irFilesArrayBuffer.slice(0));
       }));
+      const cabIR = irAudioBufferList[0]; // pick first IR (tweak as desired)
 
       let convolver = audioContext.createConvolver();
-      convolver.buffer = irAudioBufferList[0];
+      convolver.normalize = false; // we control IR gain ourselves
+      // scale IR if it's too quiet (tweak factor)
+      convolver.buffer = cabIR;// scaleAudioBuffer(audioContext, cabIR, 4.0);
 
-      distortionNode.connect(convolver);
+
+            // AMP HEAD (preamp + waveshaper + tone stack + presence)
+      const preGain = audioContext.createGain(); // input to amp head
+      const driveShaper = audioContext.createWaveShaper();
+      driveShaper.curve = generateDistortionCurve(25); // default drive amount
+      driveShaper.oversample = '4x';
+
+      sourceNode.connect(distortionNode);
+      distortionNode.connect(preGain);
+      preGain.connect(driveShaper);
+      driveShaper.connect(convolver);
       convolver.connect(audioContext.destination);
 
       const gainParam = distortionNode.parameters.get('gain');
